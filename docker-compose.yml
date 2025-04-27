@@ -1,0 +1,18 @@
+version: '3'
+
+services:
+  telegram-monitor:
+    build: .
+    container_name: telegram-monitor
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
+      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
+      - TELEGRAM_PHONE=${TELEGRAM_PHONE}
+      - SESSION_FILE=telegram_session
+      - DB_PATH=/app/data/telegram_data.db
+      - PORT=8000
+    volumes:
+      - ./data:/app/data
