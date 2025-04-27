@@ -27,6 +27,13 @@ import sqlite3
 from telethon import TelegramClient, utils
 from telethon.tl.types import Channel, User, MessageMediaPhoto, MessageMediaDocument, MessageMediaPoll, MessageMediaWebPage
 
+def clean_channel_username(username):
+    # Remove @ if present
+    if username.startswith('@'):
+        username = username[1:]
+    # Remove any trailing spaces
+    username = username.strip()
+    return username
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -183,7 +190,8 @@ async def update_channel_data(channel_username, limit=50):
     
     try:
         # Get channel entity
-        channel = await client.get_entity(channel_username)
+        clean_username = clean_channel_username(channel_username)
+        channel = await client.get_entity(clean_username)
         
         # Get channel ID
         channel_id = utils.get_peer_id(channel)
@@ -295,7 +303,7 @@ async def get_channel_posts(channel_username: str, limit: int = 50):
     
     if not channel:
         # Try to get channel and update
-        success = await update_channel_data(channel_username, limit)
+        success = await update_channel_data(clean_channel_username(channel_username), limit)
         if not success:
             raise HTTPException(status_code=404, detail=f"Channel {channel_username} not found")
         
@@ -325,8 +333,7 @@ async def get_channel_posts(channel_username: str, limit: int = 50):
 
 @app.get("/refresh/{channel_username}")
 async def refresh_channel(channel_username: str, limit: int = 50):
-    success = await update_channel_data(channel_username, limit)
-    
+    success = await update_channel_data(clean_channel_username(channel_username), limit)
     if not success:
         raise HTTPException(status_code=500, detail=f"Failed to update channel {channel_username}")
     
