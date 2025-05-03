@@ -1,0 +1,91 @@
+import os
+import logging
+from telethon import TelegramClient
+from telethon.tl.functions.channels import GetFullChannelRequest
+
+logger = logging.getLogger(__name__)
+
+class TelegramParserClient:
+    """Handles Telegram API connections and message retrieval"""
+    
+    def __init__(self, api_id, api_hash, phone, session_name='monitor_session'):
+        self.api_id = api_id
+        self.api_hash = api_hash
+        self.phone = phone
+        self.session_name = session_name
+        self.client = None
+        
+    async def connect(self):
+        """Connect to Telegram API"""
+        if self.client is None:
+            self.client = TelegramClient(self.session_name, self.api_id, self.api_hash)
+            await self.client.start(phone=self.phone)
+            logger.info("Connected to Telegram API")
+        return self.client
+    
+    async def disconnect(self):
+        """Disconnect from Telegram API"""
+        if self.client is not None:
+            await self.client.disconnect()
+            self.client = None
+            logger.info("Disconnected from Telegram API")
+    
+    async def get_channel_info(self, channel_username):
+        """Get basic information about a channel"""
+        if self.client is None:
+            await self.connect()
+            
+        try:
+            channel_entity = await self.client.get_entity(channel_username)
+            channel_full = await self.client(GetFullChannelRequest(channel=channel_entity))
+            
+            return {
+                'id': channel_entity.id,
+                'username': channel_username,
+                'title': channel_entity.title,
+                'about': channel_full.full_chat.about,
+                'members_count': channel_full.full_chat.participants_count if hasattr(channel_full.full_chat, 'participants_count') else None
+            }
+        except Exception as e:
+            logger.error(f"Error getting channel info for {channel_username}: {e}")
+            return None
+    
+    async def get_channel_posts(self, channel_username, limit=10, offset_id=0):
+        """Get recent posts from a channel with engagement metrics"""
+        if self.client is None:
+            await self.connect()
+            
+        try:
+            channel_entity = await self.client.get_entity(channel_username)
+            messages = await self.client.get_messages(
+                channel_entity, 
+                limit=limit,
+                offset_id=offset_id
+            )
+            
+            result = []
+            for msg in messages:
+                # Extract post data
+                post_data = {
+                    'id': msg.id,
+                    'date': msg.date.isoformat(),
+                    'text': msg.text,
+                    'views': getattr(msg, 'views', 0),
+                    'forwards': getattr(msg, 'forwards', 0),
+                    'reactions': []
+                }
+                
+                # Add reactions if available
+                if hasattr(msg, 'reactions') and msg.reactions:
+                    for reaction in msg.reactions.results:
+                        post_data['reactions'].append({
+                            'emoji': reaction.reaction.emoticon,
+                            'count': reaction.count
+                        })
+                
+                result.append(post_data)
+            
+            return result
+        except Exception as e:
+            logger.error(f"Error getting posts for {channel_username}: {e}")
+            return []

@@ -1,0 +1,75 @@
+"""
+API functions for the Telegram Parser
+These functions will be called by n8n via HTTP
+"""
+import os
+import json
+import logging
+from dotenv import load_dotenv
+from .client import TelegramParserClient
+from .processors import process_channel_posts
+
+logger = logging.getLogger(__name__)
+
+# Load environment variables once
+load_dotenv()
+API_ID = os.getenv('API_ID')
+API_HASH = os.getenv('API_HASH')
+PHONE = os.getenv('PHONE')
+
+# Create a singleton client
+client = None
+
+async def get_client():
+    """Get or create the Telegram client"""
+    global client
+    if client is None:
+        client = TelegramParserClient(
+            api_id=API_ID,
+            api_hash=API_HASH,
+            phone=PHONE
+        )
+    return client
+
+async def get_channel_info(channel_username):
+    """Get information about a Telegram channel"""
+    client = await get_client()
+    await client.connect()
+    try:
+        result = await client.get_channel_info(channel_username)
+        return result
+    finally:
+        await client.disconnect()
+
+async def get_channel_posts(channel_username, limit=10, offset_id=0):
+    """Get and process recent posts from a channel"""
+    client = await get_client()
+    await client.connect()
+    try:
+        raw_posts = await client.get_channel_posts(
+            channel_username=channel_username,
+            limit=limit,
+            offset_id=offset_id
+        )
+        processed_posts = process_channel_posts(raw_posts)
+        return processed_posts
+    finally:
+        await client.disconnect()
+
+async def get_multiple_channels_posts(channel_usernames, posts_per_channel=10):
+    """Get posts from multiple channels at once"""
+    result = {}
+    client = await get_client()
+    await client.connect()
+    
+    try:
+        for channel in channel_usernames:
+            raw_posts = await client.get_channel_posts(
+                channel_username=channel,
+                limit=posts_per_channel
+            )
+            processed_posts = process_channel_posts(raw_posts)
+            result[channel] = processed_posts
+        return result
+    finally:
+        await client.disconnect()

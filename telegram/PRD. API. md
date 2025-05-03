@@ -1,0 +1,361 @@
+# Telegram Post Parser API - Technical Task & PRD
+
+## Product Requirements Document (PRD)
+
+### 1. Product Overview
+The Telegram Post Parser API is a lightweight service that connects to the Telegram API using Telethon to collect posts from competitor Telegram channels. It provides this data through a simple HTTP endpoint that can be called from n8n workflows, enabling automated monitoring and analysis of competitor content performance.
+
+### 2. User Stories
+- As an n8n workflow, I want to fetch recent posts from specific Telegram channels so that I can analyze competitor content.
+- As an n8n workflow, I want to collect engagement metrics (views, reactions) for posts so that I can measure content performance.
+- As an n8n workflow, I want to receive consistently structured data regardless of the source channel so that I can process it uniformly.
+
+### 3. Features & Requirements
+- **Channel Monitoring**: Ability to fetch posts from specified Telegram channels.
+- **Data Collection**: Extract the following from each post:
+  - Post text content
+  - Media attachments (URLs or references)
+  - Post date/time
+  - Views count
+  - Reactions/likes data
+  - Forward count
+  - Post ID for reference
+- **API Access**: Expose functionality through HTTP endpoint(s) compatible with n8n.
+- **Message Content Processors (MCPs)**: Standardize the data format for consistent output.
+- **Configurable Parameters**: Allow specification of channels, post limit, date range.
+
+### 4. Out of Scope
+- Storage of post data (handled by n8n)
+- Analysis and calculations on the data (handled by n8n)
+- User authentication system (basic auth or API key only)
+- Admin interface or dashboard
+- Scheduled data collection (handled by n8n triggers)
+
+### 5. Technical Constraints
+- Must use Telethon library for Telegram API access
+- Must be deployable to Render.com
+- Must be structured as a modular service
+- Configuration via environment variables
+
+### 6. Success Criteria
+- API successfully returns posts from specified channels
+- All required data points are extracted from posts
+- Output format is consistent and parsable by n8n
+- Service deploys successfully to Render.com
+- Performance is adequate for on-demand use from n8n workflows
+
+## Technical Task
+
+### 1. Architecture
+The service will be implemented as a simple FastAPI application that exposes HTTP endpoints. The core functionality will use Telethon to interact with the Telegram API. Message Content Processors will handle the standardization of data.
+
+```
++----------------+      +----------------+      +----------------+
+|                |      |                |      |                |
+|  n8n Workflow  +----->+  FastAPI App   +----->+  Telethon     |
+|                |      |  with MCPs     |      |  Client       |
+|                |      |                |      |                |
++----------------+      +----------------+      +-------+--------+
+                                                       |
+                                                       v
+                                                +------+--------+
+                                                |               |
+                                                | Telegram API  |
+                                                |               |
+                                                +---------------+
+```
+
+### 2. API Endpoints
+
+#### 2.1 Main Endpoint: Get Channel Posts
+```
+GET /api/posts
+```
+
+Query Parameters:
+- `channels`: Comma-separated list of channel usernames (required)
+- `limit`: Maximum number of posts to retrieve per channel (default: 10)
+- `days_back`: Only fetch posts from the last X days (optional)
+
+Response: JSON array of post objects
+
+#### 2.2 Health Check Endpoint
+```
+GET /api/health
+```
+
+Response: Simple status object for monitoring
+
+### 3. Core Data Collection Functions
+
+#### 3.1 Channel Connection
+- Authenticate with Telegram API
+- Connect to specified channels
+- Validate access to channels
+
+#### 3.2 Post Retrieval
+- Fetch posts based on parameters
+- Extract all required data points
+- Process through MCPs
+
+### 4. Message Content Processors (MCPs)
+
+The MCPs will be a set of functions that process raw Telegram message objects to extract and normalize data:
+
+#### 4.1 Text Content Processor
+- Extract main text content
+- Handle formatted text (markdown, HTML)
+- Process mentions and hashtags
+
+#### 4.2 Media Processor
+- Identify media type (photo, video, document, etc.)
+- Extract media URLs or file references
+- Handle media groups (albums)
+
+#### 4.3 Engagement Metrics Processor
+- Extract views count
+- Process reactions data
+- Collect forwards count
+
+#### 4.4 Metadata Processor
+- Extract post date/time
+- Process post ID and reference information
+- Handle channel-specific metadata
+
+### 5. Response Format
+The API will return a consistent JSON structure for all posts:
+
+```json
+{
+  "posts": [
+    {
+      "channel_username": "channel_name",
+      "channel_title": "Channel Display Name",
+      "post_id": 12345,
+      "date": "2025-05-01T12:34:56Z",
+      "text": "Post text content...",
+      "media": [
+        {
+          "type": "photo",
+          "url": "media_url_or_reference"
+        }
+      ],
+      "engagement": {
+        "views": 1000,
+        "forwards": 50,
+        "reactions": [
+          {
+            "emoji": "👍",
+            "count": 25
+          },
+          {
+            "emoji": "❤️",
+            "count": 15
+          }
+        ]
+      },
+      "has_link": true,
+      "link_domains": ["example.com"]
+    }
+  ],
+  "meta": {
+    "channels_processed": 1,
+    "total_posts": 1,
+    "retrieved_at": "2025-05-02T15:30:45Z"
+  }
+}
+```
+
+### 6. Sample Implementation
+
+#### 6.1 FastAPI Application Structure
+
+```python
+# app.py
+import os
+from fastapi import FastAPI, Query
+from typing import List, Optional
+from telegram_parser import TelegramParser
+
+app = FastAPI(title="Telegram Post Parser API")
+parser = TelegramParser(
+    api_id=os.getenv("API_ID"),
+    api_hash=os.getenv("API_HASH"),
+    phone=os.getenv("PHONE")
+)
+
+@app.get("/api/posts")
+async def get_posts(
+    channels: str = Query(..., description="Comma-separated list of channel usernames"),
+    limit: int = Query(10, description="Maximum posts per channel"),
+    days_back: Optional[int] = Query(None, description="Only posts from the last X days")
+):
+    channel_list = [c.strip() for c in channels.split(",")]
+    posts = await parser.get_posts(channel_list, limit, days_back)
+    return {"posts": posts, "meta": {"channels_processed": len(channel_list), "total_posts": len(posts)}}
+
+@app.get("/api/health")
+async def health_check():
+    return {"status": "ok", "version": "1.0.0"}
+```
+
+#### 6.2 Telegram Parser Module
+
+```python
+# telegram_parser.py
+import logging
+from datetime import datetime, timedelta
+from telethon import TelegramClient
+from telethon.tl.functions.channels import GetFullChannelRequest
+from .processors import TextProcessor, MediaProcessor, EngagementProcessor, MetadataProcessor
+
+class TelegramParser:
+    def __init__(self, api_id, api_hash, phone):
+        self.api_id = api_id
+        self.api_hash = api_hash
+        self.phone = phone
+        self.logger = logging.getLogger(__name__)
+        
+        # Initialize processors
+        self.text_processor = TextProcessor()
+        self.media_processor = MediaProcessor()
+        self.engagement_processor = EngagementProcessor()
+        self.metadata_processor = MetadataProcessor()
+    
+    async def get_posts(self, channel_list, limit=10, days_back=None):
+        """Retrieve posts from specified channels with engagement metrics."""
+        client = TelegramClient('parser_session', self.api_id, self.api_hash)
+        await client.start(phone=self.phone)
+        
+        results = []
+        
+        for channel in channel_list:
+            try:
+                channel_entity = await client.get_entity(channel)
+                channel_info = await client(GetFullChannelRequest(channel=channel_entity))
+                
+                # Calculate date filter if days_back specified
+                date_filter = None
+                if days_back:
+                    date_filter = datetime.now() - timedelta(days=days_back)
+                
+                # Get messages
+                messages = await client.get_messages(channel_entity, limit=limit)
+                
+                for msg in messages:
+                    # Skip messages older than date_filter if specified
+                    if date_filter and msg.date.replace(tzinfo=None) < date_filter:
+                        continue
+                    
+                    # Process message with MCPs
+                    processed_post = {
+                        "channel_username": channel,
+                        "channel_title": channel_entity.title,
+                        "post_id": msg.id,
+                        "date": msg.date.isoformat(),
+                        "text": self.text_processor.process(msg),
+                        "media": self.media_processor.process(msg),
+                        "engagement": self.engagement_processor.process(msg),
+                        **self.metadata_processor.process(msg)
+                    }
+                    
+                    results.append(processed_post)
+                    
+            except Exception as e:
+                self.logger.error(f"Error processing channel {channel}: {str(e)}")
+        
+        await client.disconnect()
+        return results
+```
+
+#### 6.3 Example Message Content Processor
+
+```python
+# processors/engagement_processor.py
+class EngagementProcessor:
+    def process(self, message):
+        """Extract engagement metrics from a message."""
+        engagement = {
+            "views": getattr(message, "views", 0),
+            "forwards": getattr(message, "forwards", 0),
+            "reactions": []
+        }
+        
+        # Process reactions if available
+        if hasattr(message, "reactions") and message.reactions:
+            for reaction in message.reactions.results:
+                engagement["reactions"].append({
+                    "emoji": reaction.reaction.emoticon,
+                    "count": reaction.count
+                })
+        
+        return engagement
+```
+
+### 7. Deployment Instructions
+
+#### 7.1 GitHub Repository Structure
+```
+telegram-monitor/
+├── .env.example          # Template for environment variables
+├── .github/              # GitHub Actions workflow
+├── .gitignore            # Gitignore file
+├── README.md             # Project documentation
+├── app.py                # FastAPI application entry point
+├── requirements.txt      # Dependencies
+├── telegram_parser/      # Main module
+│   ├── __init__.py
+│   ├── parser.py         # TelegramParser class
+│   └── processors/       # Message Content Processors
+│       ├── __init__.py
+│       ├── text_processor.py
+│       ├── media_processor.py
+│       ├── engagement_processor.py
+│       └── metadata_processor.py
+└── tests/                # Unit tests
+```
+
+#### 7.2 Render.com Setup
+- Create a new Web Service
+- Connect to GitHub repository
+- Environment: Python 3.10+
+- Build Command: `pip install -r requirements.txt`
+- Start Command: `uvicorn app:app --host 0.0.0.0 --port $PORT`
+- Add environment variables (API_ID, API_HASH, PHONE)
+
+### 8. Dependencies
+- Python 3.10+
+- FastAPI
+- Uvicorn
+- Telethon
+- python-dotenv
+- httpx
+
+## Environment Setup Requirements (Separate Discussion)
+
+### 1. Python Environment
+- Python 3.10+ installation
+- Virtual environment setup and activation
+- Installing dependencies from requirements.txt
+
+### 2. Telegram API Credentials
+- Registering at my.telegram.org
+- Creating an application
+- Securely storing API ID and Hash
+- First authentication process
+
+### 3. Environment Variables
+- Setting up .env file
+- Required variables list
+- Securing credentials in production
+
+### 4. Local Testing
+- Running the FastAPI application locally
+- Testing endpoints with curl or Postman
+- Debugging common issues
+
+### 5. Deployment Preparation
+- GitHub repository setup
+- Creating a Render.com account
+- Setting up CI/CD pipeline
+- Environment variables in Render.com
