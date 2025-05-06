@@ -1,104 +1,183 @@
 import logging
+import time
+import random
+import asyncio
 from datetime import datetime, timedelta
 from telethon import TelegramClient
 from telethon.tl.functions.channels import GetFullChannelRequest
-from telethon.tl.functions.messages import GetMessagesReactionsRequest
+from telethon.errors import FloodWaitError
 from .processors.text_processor import TextProcessor
 from .processors.media_processor import MediaProcessor
 from .processors.engagement_processor import EngagementProcessor
 from .processors.metadata_processor import MetadataProcessor
 
 class TelegramParser:
-    def __init__(self, api_id, api_hash, phone):
+    def __init__(self, api_id, api_hash, phone, session_file='parser_session'):
         self.api_id = api_id
         self.api_hash = api_hash
         self.phone = phone
+        self.session_file = session_file
         self.logger = logging.getLogger(__name__)
+        
+        # Initialize processors
         self.text_processor = TextProcessor()
         self.media_processor = MediaProcessor()
         self.engagement_processor = EngagementProcessor()
         self.metadata_processor = MetadataProcessor()
+        
+        # Rate limiting properties
+        self.request_count = 0
+        self.last_request_time = 0
+        self.max_requests_per_minute = 20  # Conservative limit
+
+    async def _rate_limit(self):
+        """Implement rate limiting to avoid blocks"""
+        current_time = time.time()
+        time_passed = current_time - self.last_request_time
+        
+        # If we've made too many requests in the past minute, sleep
+        if self.request_count >= self.max_requests_per_minute and time_passed < 60:
+            sleep_time = 60 - time_passed + random.uniform(1, 5)  # Add jitter
+            self.logger.info(f"Rate limiting: sleeping for {sleep_time:.2f} seconds")
+            await asyncio.sleep(sleep_time)
+            self.request_count = 0
+            self.last_request_time = time.time()
+        
+        # If more than a minute has passed, reset counter
+        elif time_passed >= 60:
+            self.request_count = 0
+            self.last_request_time = current_time
+        
+        # Increment request counter
+        self.request_count += 1
 
     async def get_posts(self, channel_list, limit=10, days_back=None):
-        client = TelegramClient('parser_session', self.api_id, self.api_hash)
-        await client.start(phone=self.phone)
-        results = []
-        for channel in channel_list:
-            try:
-                channel_entity = await client.get_entity(channel)
-                channel_info = await client(GetFullChannelRequest(channel=channel_entity))
-                date_filter = None
-                if days_back:
-                    date_filter = datetime.now() - timedelta(days=days_back)
-                messages = await client.get_messages(channel_entity, limit=limit)
-                for msg in messages:
-                    if date_filter and msg.date.replace(tzinfo=None) < date_filter:
-                        continue
-                    processed_post = {
-                        "channel_username": channel,
-                        "channel_title": getattr(channel_entity, "title", ""),
-                        "post_id": msg.id,
-                        "date": msg.date.isoformat(),
-                        "text": self.text_processor.process(msg),
-                        "media": self.media_processor.process(msg),
-                        "engagement": await self.engagement_processor.process(client, channel_entity, msg),
-                        **self.metadata_processor.process(msg)
-                    }
-                    results.append(processed_post)
-            except Exception as e:
-                self.logger.error(f"Error processing channel {channel}: {str(e)}")
-        await client.disconnect()
-        return results
-
-async def fetch_reactions(client, channel_entity, message_id):
-    try:
-        response = await client(GetMessagesReactionsRequest(
-            peer=channel_entity,
-            id=[message_id]
-        ))
-        # The response should have a .reactions attribute (a list)
-        reactions = []
-        if hasattr(response, 'reactions'):
-            for reaction in response.reactions:
-                # reaction.reaction can be an object or a string
-                emoji = getattr(reaction.reaction, "emoticon", None) or getattr(reaction.reaction, "document_id", None) or reaction.reaction
-                reactions.append({
-                    "emoji": emoji,
-                    "count": reaction.count
-                })
-        return reactions
-    except Exception as e:
-        print(f"Error fetching reactions: {e}")
-        return []
-
-class EngagementProcessor:
-    async def process(self, client, channel_entity, message):
-        engagement = {
-            "views": getattr(message, "views", 0),
-            "forwards": getattr(message, "forwards", 0),
-            "reactions": []
-        }
-        # Try to get reactions directly
-        if hasattr(message, "reactions") and message.reactions:
-            for reaction in message.reactions.results:
-                engagement["reactions"].append({
-                    "emoji": getattr(reaction.reaction, "emoticon", None),
-                    "count": reaction.count
-                })
-        else:
-            # Fallback: use GetMessagesReactionsRequest
-            try:
-                reactions_response = await client(GetMessagesReactionsRequest(
-                    peer=channel_entity,
-                    id=[message.id]
-                ))
-                if hasattr(reactions_response, "reactions"):
-                    for reaction in reactions_response.reactions:
-                        engagement["reactions"].append({
-                            "emoji": getattr(reaction.reaction, "emoticon", None),
-                            "count": reaction.count
-                        })
-            except Exception as e:
-                # Optionally log the error
-                pass
-        return engagement
+        """Get posts from specified channels with rate limiting and anti-block measures"""
+        client = TelegramClient(self.session_file, self.api_id, self.api_hash)
+        
+        try:
+            # Connect to client
+            await client.connect()
+            
+            # Check authorization
+            if not await client.is_user_authorized():
+                self.logger.info("First-time authorization required")
+                await client.send_code_request(self.phone)
+                code = input('Enter the code you received: ')
+                await client.sign_in(self.phone, code)
+                
+            results = []
+            
+            for channel in channel_list:
+                try:
+                    # Apply rate limiting before each request
+                    await self._rate_limit()
+                    
+                    # Add random delay between channels to appear more human-like
+                    await asyncio.sleep(random.uniform(2, 5))
+                    
+                    # Get channel entity
+                    channel_entity = await client.get_entity(channel)
+                    
+                    # Add small delay before next API call
+                    await asyncio.sleep(random.uniform(1, 2))
+                    
+                    # Apply rate limiting again
+                    await self._rate_limit()
+                    
+                    # Get channel info
+                    channel_info = await client(GetFullChannelRequest(channel=channel_entity))
+                    
+                    # Calculate date filter if days_back specified
+                    date_filter = None
+                    if days_back:
+                        date_filter = datetime.now() - timedelta(days=days_back)
+                    
+                    # Apply rate limiting before getting messages
+                    await self._rate_limit()
+                    
+                    # Get messages (with retry logic)
+                    try:
+                        messages = await client.get_messages(
+                            channel_entity, 
+                            limit=limit
+                        )
+                        
+                        for msg in messages:
+                            # Skip messages older than date_filter if specified
+                            if date_filter and msg.date.replace(tzinfo=None) < date_filter:
+                                continue
+                            
+                            # Process message with MCPs
+                            processed_post = {
+                                "channel_username": channel,
+                                "channel_title": getattr(channel_entity, "title", ""),
+                                "post_id": msg.id,
+                                "date": msg.date.isoformat(),
+                                "text": self.text_processor.process(msg),
+                                "media": self.media_processor.process(msg),
+                                "engagement": await self.engagement_processor.process(client, msg, channel_entity),
+                                **self.metadata_processor.process(msg)
+                            }
+                            
+                            results.append(processed_post)
+                            
+                            # Add small delay between processing messages
+                            await asyncio.sleep(random.uniform(0.3, 0.7))
+                            
+                    except FloodWaitError as e:
+                        wait_time = e.seconds
+                        self.logger.error(f"Rate limit hit for {channel}. Need to wait {wait_time} seconds.")
+                        if wait_time < 300:  # Only retry for short waits
+                            self.logger.info(f"Waiting {wait_time} seconds before retry...")
+                            await asyncio.sleep(wait_time + 10)  # Add buffer time
+                            # Get messages with reduced limit
+                            retry_limit = max(1, limit//2)
+                            self.logger.info(f"Retrying with reduced limit of {retry_limit}")
+                            
+                            # Apply rate limiting again
+                            await self._rate_limit()
+                            
+                            messages = await client.get_messages(
+                                channel_entity, 
+                                limit=retry_limit
+                            )
+                            
+                            for msg in messages:
+                                if date_filter and msg.date.replace(tzinfo=None) < date_filter:
+                                    continue
+                                
+                                processed_post = {
+                                    "channel_username": channel,
+                                    "channel_title": getattr(channel_entity, "title", ""),
+                                    "post_id": msg.id,
+                                    "date": msg.date.isoformat(),
+                                    "text": self.text_processor.process(msg),
+                                    "media": self.media_processor.process(msg),
+                                    "engagement": await self.engagement_processor.process(client, msg, channel_entity),
+                                    **self.metadata_processor.process(msg)
+                                }
+                                
+                                results.append(processed_post)
+                                
+                                # Add small delay between processing messages
+                                await asyncio.sleep(random.uniform(0.3, 0.7))
+                        else:
+                            self.logger.error(f"Wait time too long ({wait_time}s) for {channel}. Skipping.")
+                    
+                except Exception as e:
+                    self.logger.error(f"Error processing channel {channel}: {str(e)}")
+                    # Continue with next channel instead of failing completely
+                    continue
+            
+            self.logger.info(f"Successfully processed {len(results)} posts from {len(channel_list)} channels")
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Error in get_posts: {str(e)}")
+            raise
+            
+        finally:
+            # Always disconnect client
+            await client.disconnect()
+            self.logger.info("Client disconnected")

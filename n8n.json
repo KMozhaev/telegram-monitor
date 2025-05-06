@@ -1,0 +1,171 @@
+{
+  "name": "Collect Posts From Scraper",
+  "nodes": [
+    {
+      "parameters": {
+        "interval": "15",
+        "unit": "minutes"
+      },
+      "id": "CronTrigger",
+      "name": "Cron Trigger",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [300, 300]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "baseId": "pat9TuZVE4ARuMkR8",
+        "tableId": "UserChannels"
+      },
+      "id": "GetChannels",
+      "name": "Get Channels",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 4,
+      "position": [500, 300],
+      "credentials": {
+        "airtableApi": "YOUR_AIRTABLE_CREDENTIALS"
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplit": "records"
+      },
+      "id": "SplitChannels",
+      "name": "Split Channels",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 1,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://your-scraper-api.com/api/posts?channels={{$json.fields.channel_username}}&limit=30",
+        "method": "GET",
+        "responseFormat": "json"
+      },
+      "id": "FetchPosts",
+      "name": "Fetch Posts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "fieldToSplit": "body.posts"
+      },
+      "id": "SplitPosts",
+      "name": "Split Posts",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 1,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "const raw = $json.reactions_raw || [];\nlet total = 0;\ntry {\n  total = raw.reduce((sum, emoji) => sum + emoji.count, 0);\n} catch (e) {\n  total = 0;\n}\nreturn {\n  json: {\n    ...$json,\n    reactions_total: total\n  }\n};"
+      },
+      "id": "CalculateReactions",
+      "name": "Calc Reactions Total",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1300, 300]
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "baseId": "pat9TuZVE4ARuMkR8",
+        "tableId": "Posts",
+        "options": {
+          "mergeFields": ["post_id"]
+        },
+        "fields": [
+          {
+            "name": "channel_username",
+            "value": "={{$json.channel_username}}"
+          },
+          {
+            "name": "post_id",
+            "value": "={{$json.post_id}}"
+          },
+          {
+            "name": "date",
+            "value": "={{$json.date}}"
+          },
+          {
+            "name": "views",
+            "value": "={{$json.views}}"
+          },
+          {
+            "name": "forwards",
+            "value": "={{$json.forwards}}"
+          },
+          {
+            "name": "reactions_total",
+            "value": "={{$json.reactions_total}}"
+          },
+          {
+            "name": "reactions_raw",
+            "value": "={{JSON.stringify($json.reactions_raw)}}"
+          },
+          {
+            "name": "content_preview",
+            "value": "={{$json.text.slice(0, 120)}}"
+          }
+        ]
+      },
+      "id": "UpsertToPosts",
+      "name": "Upsert Posts",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 4,
+      "position": [1500, 300],
+      "credentials": {
+        "airtableApi": "YOUR_AIRTABLE_CREDENTIALS"
+      }
+    }
+  ],
+  "connections": {
+    "Cron Trigger": {
+      "main": [
+        [
+          "Get Channels"
+        ]
+      ]
+    },
+    "Get Channels": {
+      "main": [
+        [
+          "Split Channels"
+        ]
+      ]
+    },
+    "Split Channels": {
+      "main": [
+        [
+          "Fetch Posts"
+        ]
+      ]
+    },
+    "Fetch Posts": {
+      "main": [
+        [
+          "Split Posts"
+        ]
+      ]
+    },
+    "Split Posts": {
+      "main": [
+        [
+          "Calc Reactions Total"
+        ]
+      ]
+    },
+    "Calc Reactions Total": {
+      "main": [
+        [
+          "Upsert Posts"
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "versionId": "v1"
+}

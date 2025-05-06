@@ -8,8 +8,8 @@ load_dotenv()
 
 # Telegram API credentials
 API_ID = os.getenv('API_ID')
-API_HASH = os.getenv('API_HASH')
-PHONE = os.getenv('PHONE')
+API_HASH = "e4df1377d1887c91744718d4821cc9e5"
+PHONE = "+79991234567"
 
 async def get_channel_posts(channel_username, limit=10):
     """

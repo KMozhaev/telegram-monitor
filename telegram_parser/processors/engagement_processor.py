@@ -1,47 +1,43 @@
+import asyncio
+import random
 from telethon.tl.functions.messages import GetMessagesReactionsRequest
 
 class EngagementProcessor:
     async def process(self, client, message, channel_entity):
+        """Extract engagement metrics from a message with anti-blocking measures"""
         engagement = {
             "views": getattr(message, "views", 0),
             "forwards": getattr(message, "forwards", 0),
             "reactions": []
         }
-        # Try direct reactions
+        
+        # Try direct reactions first (less API intensive)
         if hasattr(message, "reactions") and message.reactions:
             for reaction in message.reactions.results:
                 engagement["reactions"].append({
-                    "emoji": reaction.reaction.emoticon,
+                    "emoji": getattr(reaction.reaction, "emoticon", None),
                     "count": reaction.count
                 })
-        else:
-            # Try API request for reactions
-            try:
-                reactions_response = await client(GetMessagesReactionsRequest(
-                    peer=channel_entity,
-                    id=[message.id]
-                ))
-                if hasattr(reactions_response, "reactions"):
-                    for reaction in reactions_response.reactions:
-                        engagement["reactions"].append({
-                            "emoji": getattr(reaction.reaction, "emoticon", None),
-                            "count": reaction.count
-                        })
-            except Exception as e:
-                # Log or handle error if needed
-                pass
+            return engagement
+        
+        # Only make additional API request if necessary and with delay
+        try:
+            # Add random delay before API call to appear more natural
+            await asyncio.sleep(random.uniform(0.5, 1.5))
+            
+            reactions_response = await client(GetMessagesReactionsRequest(
+                peer=channel_entity,
+                id=[message.id]
+            ))
+            
+            if hasattr(reactions_response, "reactions"):
+                for reaction in reactions_response.reactions:
+                    engagement["reactions"].append({
+                        "emoji": getattr(reaction.reaction, "emoticon", None) or str(reaction.reaction),
+                        "count": reaction.count
+                    })
+        except Exception as e:
+            # Just log and continue - reactions are optional
+            pass
+            
         return engagement
-
-async def get_reactions(client, channel_entity, message_id):
-    try:
-        response = await client(GetMessagesReactionsRequest(
-            peer=channel_entity,
-            id=[message_id]
-        ))
-        if hasattr(response, 'reactions'):
-            for reaction in response.reactions:
-                print(f"Emoji: {reaction.reaction}, Count: {reaction.count}")
-        else:
-            print("No reactions attribute in response")
-    except Exception as e:
-        print(f"Error: {e}")
