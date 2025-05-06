@@ -2,8 +2,13 @@ import os
 import logging
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import JSONResponse
-from typing import Optional, List
+from typing import Optional
+from datetime import datetime
 from telegram_parser.parser import TelegramParser
+from dotenv import load_dotenv  # Add this import
+
+# Load environment variables from .env file
+load_dotenv()  # Add this line
 
 # Configure logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -12,12 +17,25 @@ logger = logging.getLogger(__name__)
 # Create FastAPI app
 app = FastAPI(title="Telegram Post Parser API")
 
-# Initialize parser with optional rate limit from environment
+# Check if API credentials are loaded
+api_id = os.getenv("API_ID")
+api_hash = os.getenv("API_HASH")
+phone = os.getenv("PHONE")
+session_string = os.getenv("SESSION_STRING")
+
+# Log credential status (without revealing actual values)
+logger.info(f"API_ID: {'Not set' if not api_id else 'Set'}")
+logger.info(f"API_HASH: {'Not set' if not api_hash else 'Set'}")
+logger.info(f"PHONE: {'Not set' if not phone else 'Set'}")
+logger.info(f"SESSION_STRING: {'Not set' if not session_string else 'Set'}")
+
+# Initialize parser with string session from environment
 max_rpm = os.getenv("MAX_REQUESTS_PER_MINUTE")
 parser = TelegramParser(
-    api_id=os.getenv("API_ID"),
-    api_hash=os.getenv("API_HASH"),
-    phone=os.getenv("PHONE"),
+    api_id=api_id,
+    api_hash=api_hash,
+    phone=phone,
+    session_string=session_string
 )
 if max_rpm and max_rpm.isdigit():
     parser.max_requests_per_minute = int(max_rpm)

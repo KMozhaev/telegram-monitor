@@ -4,6 +4,7 @@ import random
 import asyncio
 from datetime import datetime, timedelta
 from telethon import TelegramClient
+from telethon.sessions import StringSession
 from telethon.tl.functions.channels import GetFullChannelRequest
 from telethon.errors import FloodWaitError
 from .processors.text_processor import TextProcessor
@@ -12,10 +13,11 @@ from .processors.engagement_processor import EngagementProcessor
 from .processors.metadata_processor import MetadataProcessor
 
 class TelegramParser:
-    def __init__(self, api_id, api_hash, phone, session_file='parser_session'):
+    def __init__(self, api_id, api_hash, phone, session_string=None, session_file='parser_session'):
         self.api_id = api_id
         self.api_hash = api_hash
         self.phone = phone
+        self.session_string = session_string
         self.session_file = session_file
         self.logger = logging.getLogger(__name__)
         
@@ -53,7 +55,13 @@ class TelegramParser:
 
     async def get_posts(self, channel_list, limit=10, days_back=None):
         """Get posts from specified channels with rate limiting and anti-block measures"""
-        client = TelegramClient(self.session_file, self.api_id, self.api_hash)
+        # Initialize client with string session if available, otherwise use file session
+        if self.session_string:
+            client = TelegramClient(StringSession(self.session_string), self.api_id, self.api_hash)
+            self.logger.info("Using StringSession for authentication")
+        else:
+            client = TelegramClient(self.session_file, self.api_id, self.api_hash)
+            self.logger.info("Using file-based session for authentication")
         
         try:
             # Connect to client
@@ -61,10 +69,19 @@ class TelegramParser:
             
             # Check authorization
             if not await client.is_user_authorized():
-                self.logger.info("First-time authorization required")
-                await client.send_code_request(self.phone)
-                code = input('Enter the code you received: ')
-                await client.sign_in(self.phone, code)
+                if self.session_string:
+                    self.logger.error("StringSession is not valid or expired")
+                    raise Exception("StringSession authentication failed")
+                elif not self.phone:
+                    self.logger.error("No phone number provided for authentication")
+                    raise Exception("Authentication required but no phone number provided")
+                else:
+                    self.logger.info("First-time authentication required")
+                    # This will cause problems in non-interactive environments
+                    # Only used for local development
+                    await client.send_code_request(self.phone)
+                    code = input('Enter the code you received: ')
+                    await client.sign_in(self.phone, code)
                 
             results = []
             
